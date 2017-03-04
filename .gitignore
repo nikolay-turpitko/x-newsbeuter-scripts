@@ -22,3 +22,7 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+vendor/
+nb-enrich-descr
+nb-html2atom

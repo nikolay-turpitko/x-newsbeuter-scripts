@@ -1,0 +1,6 @@
+"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-enrich-descr:http://www.golangprojects.com/rss.xml" job
+"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-enrich-descr:https://weworkremotely.com/categories/2-programming/jobs.rss" job
+
+"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-html2atom welovegolang.com:https://www.welovegolang.com/jobs/remote" job
+
+query:job:tags # "job"

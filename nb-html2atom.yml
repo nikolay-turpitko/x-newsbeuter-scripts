@@ -1,0 +1,15 @@
+# Config section name used in urls file so that newsbeuter
+# could pass just one parameter to the script to choose XPath extraction rules
+# (and some other settings) for the particular site.
+"welovegolang.com":
+  root-url:    "https://www.welovegolang.com"
+  # date format for Go's time.Parse()
+  date-format: "Jan 2"
+  feed-title:  "We Love Go"
+  item:        "//div[@itemscope]"
+  # paths below are relative to item's node
+  title:       "div/h4/a/span[contains(@itemprop, 'title')]"
+  link:        "div/h4/a/@href"
+  description: "div[contains(@class, 'media-body')]/div"
+  created:     "div/span[contains(@itemprop, 'datePosted')]"
+

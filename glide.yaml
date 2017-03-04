@@ -1,0 +1,8 @@
+package: github.com/nikolay-turpitko/x-rss
+import:
+- package: github.com/mmcdole/gofeed
+  version: ^1.0.0-beta
+- package: github.com/gorilla/feeds
+- package: github.com/microcosm-cc/bluemonday
+- package: gopkg.in/xmlpath.v2
+- package: github.com/spf13/viper
