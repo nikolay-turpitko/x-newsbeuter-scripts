@@ -9,7 +9,11 @@ import (
 	"golang.org/x/net/html"
 )
 
-const numWorkers = 10 // Can be more then NumCPU, because worker locked on IO.
+const (
+	// Can be more then NumCPU, because workers are blocked on net IO.
+	numWorkers        = 10
+	numWorkerChannels = numWorkers * 2
+)
 
 var (
 	prefixRx = regexp.MustCompile("^.*<body>")

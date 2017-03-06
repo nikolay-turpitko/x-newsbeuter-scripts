@@ -16,15 +16,13 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.Println("RSS filter started")
 
+	log.Println(numWorkerChannels)
 	fp := gofeed.NewParser()
 	feedIn, _ := fp.Parse(os.Stdin)
 
-	in := make(chan *gofeed.Item)
-	out := make(chan *gofeed.Item)
+	in := make(chan *gofeed.Item, numWorkerChannels)
+	out := make(chan *gofeed.Item, numWorkerChannels)
 	done := make(chan struct{})
-
-	// Send items from input feed to workers.
-	go emitItems(feedIn.Items, in)
 
 	// Start workers to process items (download content and filter).
 	for i := 0; i < numWorkers; i++ {
@@ -33,6 +31,9 @@ func main() {
 
 	// Wait workers to finish their job and close out channel.
 	go waitWorkers(done, out)
+
+	// Send items from input feed to workers.
+	go emitItems(feedIn.Items, in)
 
 	// Accumulate items into out feed.
 	items := accumulateItems(out)

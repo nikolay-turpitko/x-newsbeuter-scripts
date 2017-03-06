@@ -95,12 +95,9 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	in := make(chan *xmlpath.Node)
-	out := make(chan *feeds.Item)
+	in := make(chan *xmlpath.Node, numWorkerChannels)
+	out := make(chan *feeds.Item, numWorkerChannels)
 	done := make(chan struct{})
-
-	// Send items from input feed to workers.
-	go emitItems(cfg.item.Iter(root), in)
 
 	// Start workers to process items (download content and filter).
 	for i := 0; i < numWorkers; i++ {
@@ -109,6 +106,9 @@ func main() {
 
 	// Wait workers to finish their job and close out channel.
 	go waitWorkers(done, out)
+
+	// Send items from input feed to workers.
+	go emitItems(cfg.item.Iter(root), in)
 
 	// Accumulate items into out feed.
 	items := accumulateItems(out)
