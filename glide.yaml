@@ -1,4 +1,4 @@
-package: github.com/nikolay-turpitko/x-rss
+package: github.com/nikolay-turpitko/x-newsbeuter-scripts
 import:
 - package: github.com/mmcdole/gofeed
   version: ^1.0.0-beta
