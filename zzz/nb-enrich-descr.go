@@ -16,7 +16,6 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.Println("RSS filter started")
 
-	log.Println(numWorkerChannels)
 	fp := gofeed.NewParser()
 	feedIn, _ := fp.Parse(os.Stdin)
 

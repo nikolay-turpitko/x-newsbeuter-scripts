@@ -26,3 +26,4 @@ _testmain.go
 vendor/
 nb-enrich-descr
 nb-html2atom
+nb-job-crawler

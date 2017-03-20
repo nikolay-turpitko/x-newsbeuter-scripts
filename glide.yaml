@@ -6,3 +6,6 @@ import:
 - package: github.com/microcosm-cc/bluemonday
 - package: gopkg.in/xmlpath.v2
 - package: github.com/spf13/viper
+- package: golang.org/x/net
+  subpackages:
+  - html
