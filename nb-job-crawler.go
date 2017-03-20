@@ -24,12 +24,12 @@ import (
 
 const (
 	// maxDepth sets how deep to crowl.
-	maxDepth = 5
+	maxDepth = 3
 
 	// numLinksToStop is a maximum links to be crowled (before filtering).
 	// Note: this is a soft threshold to stop crowling, due buffering, crawler
 	// will visit far more links.
-	numLinksToStop = 1000
+	numLinksToStop = 3000
 
 	// maxLinksPerTask is a threshold to split huge tasks.
 	maxLinksPerTask = 200
@@ -52,22 +52,36 @@ var stopWords = []string{
 	"signup",
 	"signin",
 	"sign_in",
-	"twitter",
-	"ycombinator",
-	"google",
-	"youtube",
+	"auth",
 	"price",
 	"pricing",
 	"wikipedia",
 	"instgram",
 	"meetup",
 	"download",
+	"youtube",
+	"video",
+	"image",
+	"count",
+	"translator",
 	"2015",
 	"2016",
 }
 
+// Links with these words in URL will be visited, but not stored into the feed.
+var filterStopWords = []string{
+	"twitter",
+	"ycombinator",
+	"google",
+	"bing",
+	"yandex",
+	"hh",
+	"moikrug",
+	"search", // ?
+}
+
 // Only links with any of these words in URL will be stored into the feed.
-var filterWords = []string{
+var filterRequiredWords = []string{
 	"job",
 	"work",
 	"career",
@@ -93,8 +107,8 @@ var filterWords = []string{
 }
 
 var (
-	locationRx = regexp.MustCompile("{?i}remote|telecommute|удал.нн|barnaul|барнаул")
-	positionRx = regexp.MustCompile("Go|Golang|golang")
+	locationRx = regexp.MustCompile("{?i}remote|telecommute|удал.нн")
+	positionRx = regexp.MustCompile("Golang|golang")
 )
 
 type hrefDescr struct {
@@ -141,14 +155,28 @@ func main() {
 	// Filter results.
 	// Unfortunately, cannot filter during aggregation. Otherwise crawler
 	// would vaste time visiting ads many times.
-FILTER:
 	for href := range links {
-		for _, filter := range filterWords {
-			if strings.Contains(strings.ToLower(href), filter) {
-				continue FILTER
+		remove := false
+		// First check for stop words.
+		for _, w := range filterStopWords {
+			if strings.Contains(strings.ToLower(href), w) {
+				remove = true
+				break
 			}
 		}
-		delete(links, href)
+		if !remove {
+			remove = true
+			// Then check for required words.
+			for _, w := range filterRequiredWords {
+				if strings.Contains(strings.ToLower(href), w) {
+					remove = false
+					break
+				}
+			}
+		}
+		if remove {
+			delete(links, href)
+		}
 	}
 
 	// Output result feed.
