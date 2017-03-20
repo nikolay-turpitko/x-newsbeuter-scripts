@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/html"
@@ -34,13 +35,14 @@ const (
 
 	// timeout to wait for new links in aggregation loop.
 	// Used to detect when all workers finished their job.
-	timeout = 10 * time.Second
+	timeout = 10 * maxLinksPerTask * time.Second
 
 	// maxFetchAttempts is a maximum number of attempts to download page.
 	maxFetchAttempts = 3
 
 	// sleepBetweenFetchAttempts timeout to sleep between attempts to download page.
-	sleepBetweenFetchAttempts = 2 * time.Second
+	// It will be doubled at every attempt.
+	sleepBetweenFetchAttempts = 1 * time.Second
 )
 
 // Links with these words in URL will not be visited and stored.
@@ -102,11 +104,15 @@ func main() {
 	in := make(chan *task, numWorkerChannels)
 	out := make(chan *task, numWorkerChannels)
 
+	// Counter of tasks in work.
+	tasksInWork := int64(0)
+
 	// Send document from stdin to workers.
 	go func() {
 		for link, v := range processDocument(os.Stdin, nil) {
 			// Initial jobs sent individually to better distribute over workers.
 			in <- &task{0, map[string]struct{}{link: v}}
+			atomic.AddInt64(&tasksInWork, 1)
 		}
 	}()
 
@@ -117,7 +123,7 @@ func main() {
 	}
 
 	// Wait for new links from workers.
-	links := aggregateCollectedLinks(in, out)
+	links := aggregateCollectedLinks(in, out, &tasksInWork)
 	wg.Wait()
 	close(out)
 
@@ -144,7 +150,6 @@ FILTER:
 
 	//TODO: replace with Atom feed
 	//TODO: filter by article content
-	//TODO: check mime-type
 	for _, href := range sortedLinks {
 		log.Println(href)
 	}
@@ -182,18 +187,23 @@ func collectLinks(
 // fetch checks mime type and downloads page.
 func fetch(href string) (io.Reader, error) {
 	retry := 0
-	sleepTimeout := sleepBetweenFetchAttempts * time.Second
-RETRY:
-	resp, err := http.Get(href)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests && retry < maxFetchAttempts {
+	sleepTimeout := sleepBetweenFetchAttempts
+	var (
+		resp *http.Response
+		err  error
+	)
+	for {
+		resp, err = http.Get(href)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusTooManyRequests || retry >= maxFetchAttempts {
+			break
+		}
 		time.Sleep(sleepTimeout)
 		retry++
 		sleepTimeout *= 2
-		goto RETRY
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status from %s: %s", href, resp.Status)
@@ -281,23 +291,26 @@ func processDocument(
 
 func aggregateCollectedLinks(
 	in chan<- *task,
-	out <-chan *task) (links map[string]struct{}) {
+	out <-chan *task,
+	tasksInWork *int64) (links map[string]struct{}) {
 	links = make(map[string]struct{})
-	// If link is not in links map, and task's depth is less then
-	// maxDepth, than send new task (with incremented depth) into channel.
+	// Timer used to prevent hangouts.
 	timer := time.NewTimer(timeout)
 	for {
 		select {
 		case <-timer.C:
-			// Wait workers to finish their job and close out channel.
+			// Hangout watchdog.
 			close(in)
 			return links
 		case t := <-out:
 			timer.Stop()
+			atomic.AddInt64(tasksInWork, -1)
 			// Save and visit new links.
 			d := t.depth + 1
 			freshLinks := make(map[string]struct{})
 			for href, v := range t.hrefs {
+				// If link is not in links map, and task's depth is less then
+				// maxDepth, than send new task (with incremented depth) into in channel.
 				if _, ok := links[href]; !ok {
 					links[href] = struct{}{}
 					if d < maxDepth && len(links) < numLinksToStop {
@@ -308,6 +321,7 @@ func aggregateCollectedLinks(
 			if len(freshLinks) > 0 {
 				if len(freshLinks) < maxLinksPerTask {
 					in <- &task{d, freshLinks}
+					atomic.AddInt64(tasksInWork, 1)
 				} else {
 					// Split job.
 					i := 0
@@ -316,15 +330,23 @@ func aggregateCollectedLinks(
 						if i%maxLinksPerTask == 0 {
 							if i > 0 {
 								in <- &task{d, batch}
+								atomic.AddInt64(tasksInWork, 1)
 							}
 							batch = make(map[string]struct{}, maxLinksPerTask)
 						}
 						batch[href] = v
+						i++
 					}
 					if len(batch) > 0 {
 						in <- &task{d, batch}
+						atomic.AddInt64(tasksInWork, 1)
 					}
 				}
+			}
+			inWork := atomic.LoadInt64(tasksInWork)
+			if inWork <= 0 {
+				close(in)
+				return links
 			}
 			timer.Reset(timeout)
 		}
