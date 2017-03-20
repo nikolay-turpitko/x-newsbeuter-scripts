@@ -9,6 +9,8 @@ for newsbeuter:
 1. `nb-enrich-descr`: RSS|Atom -> Atom, with description supplemented with
    content of the article's link;
 2. `nb-html2atom`: HTML -> Atom,  according to XPath rules.
+3. `nb-job-crawler`: HTML -> Atom, crawl all links from initial page, filter
+   with hardocded rules.
 
 Both scripts were created to filter and monitor job feeds (to find remote job),
 but they can be useful for other purposes.
@@ -36,6 +38,11 @@ want to miss their offerings also. So, we could simply convert interesting html
 page into the feed ourselves, using XPath rules. There are plenty of online
 services for the task. Unfortunately, most of them require payment or dead. So,
 it's more reliable to have simple local script for this task. 
+
+Third script, __nb-job-crawler__, is a very crude crawler with hardocded
+configuration. Though it crawls nicely, it very badly filters results.
+Returns a lot of garbage links. More advanced logic required to filter out
+false hits, but I have no time for it.
 
 __Note__: Scripts created for my own use. So, no tests nor installer. If you
 decide to use this scripts, you'll need a Go compiler. Build like in
