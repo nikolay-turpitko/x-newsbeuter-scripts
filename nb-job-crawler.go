@@ -10,12 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/feeds"
 	"golang.org/x/net/html"
 )
 
@@ -23,19 +24,19 @@ import (
 
 const (
 	// maxDepth sets how deep to crowl.
-	maxDepth = 4
+	maxDepth = 5
 
 	// numLinksToStop is a maximum links to be crowled (before filtering).
-	// Note: this is a soft threshold to stop crowling, due buffering, crowler
+	// Note: this is a soft threshold to stop crowling, due buffering, crawler
 	// will visit far more links.
-	numLinksToStop = 400
+	numLinksToStop = 1000
 
 	// maxLinksPerTask is a threshold to split huge tasks.
-	maxLinksPerTask = 100
+	maxLinksPerTask = 200
 
 	// timeout to wait for new links in aggregation loop.
-	// Used to detect when all workers finished their job.
-	timeout = 10 * maxLinksPerTask * time.Second
+	// Used as an anti-hangout watchdog timer.
+	timeout = 10 * time.Minute
 
 	// maxFetchAttempts is a maximum number of attempts to download page.
 	maxFetchAttempts = 3
@@ -91,9 +92,19 @@ var filterWords = []string{
 	"employ",
 }
 
+var (
+	locationRx = regexp.MustCompile("{?i}remote|telecommute|удал.нн|barnaul|барнаул")
+	positionRx = regexp.MustCompile("Go|Golang|golang")
+)
+
+type hrefDescr struct {
+	// item should be nil if content doesn't match to filter.
+	item *feeds.Item
+}
+
 type task struct {
 	depth int
-	hrefs map[string]struct{}
+	hrefs map[string]hrefDescr
 }
 
 func main() {
@@ -111,7 +122,7 @@ func main() {
 	go func() {
 		for link, v := range processDocument(os.Stdin, nil) {
 			// Initial jobs sent individually to better distribute over workers.
-			in <- &task{0, map[string]struct{}{link: v}}
+			in <- &task{0, map[string]hrefDescr{link: v}}
 			atomic.AddInt64(&tasksInWork, 1)
 		}
 	}()
@@ -139,20 +150,25 @@ FILTER:
 		}
 		delete(links, href)
 	}
-	sortedLinks := make([]string, 0, len(links))
-	for href := range links {
-		sortedLinks = append(sortedLinks, href)
-	}
-	sort.Strings(sortedLinks)
 
 	// Output result feed.
-	//writeOutFeed(feedIn, items)
-
-	//TODO: replace with Atom feed
-	//TODO: filter by article content
-	for _, href := range sortedLinks {
-		log.Println(href)
+	if len(links) > 0 {
+		t := time.Now()
+		feedOut := feeds.Feed{
+			Title:   "Custom job crawler feed",
+			Link:    &feeds.Link{Href: ""},
+			Updated: t,
+			Created: t,
+			Items:   make([]*feeds.Item, 0, len(links)),
+		}
+		for _, v := range links {
+			if v.item != nil {
+				feedOut.Items = append(feedOut.Items, v.item)
+			}
+		}
+		feedOut.WriteAtom(os.Stdout)
 	}
+
 	log.Println("RSS filter finished")
 }
 
@@ -163,7 +179,7 @@ func collectLinks(
 	for t := range in {
 		// There is a good chance that many links from close pages will overlap.
 		// It's better to remove duplicates localy.
-		collected := map[string]struct{}{}
+		collected := map[string]hrefDescr{}
 		for href := range t.hrefs {
 			rootURL, err := url.Parse(href)
 			if err != nil {
@@ -230,10 +246,13 @@ func fetch(href string) (io.Reader, error) {
 
 func processDocument(
 	r io.Reader,
-	rootURL *url.URL) (links map[string]struct{}) {
-	links = map[string]struct{}{}
+	rootURL *url.URL) (links map[string]hrefDescr) {
+	links = map[string]hrefDescr{}
 	p := customBluemondayPolicy()
-	z := html.NewTokenizer(p.SanitizeReader(r))
+	r = p.SanitizeReader(r)
+	var copy bytes.Buffer
+	r = io.TeeReader(r, &copy)
+	z := html.NewTokenizer(r)
 	for {
 		tt := z.Next()
 		switch tt {
@@ -275,25 +294,44 @@ func processDocument(
 				l.Path = strings.TrimSuffix(l.Path, "/") // Remove trailing slash, can cause errors on rare sites, but eliminates some duplicates.
 				if l.IsAbs() {
 					if strings.HasPrefix(l.Scheme, "http") {
-						links[l.String()] = struct{}{}
+						href := l.String()
+						links[href] = *makeHrefDescr(href, copy.Bytes())
 					}
 					break ATTRS
 				}
 				if rootURL == nil {
 					break ATTRS
 				}
-				links[rootURL.ResolveReference(l).String()] = struct{}{}
+				href := rootURL.ResolveReference(l).String()
+				links[href] = *makeHrefDescr(href, copy.Bytes())
 			}
 		}
 	}
 	return links
 }
 
+func makeHrefDescr(href string, content []byte) *hrefDescr {
+	if !filterByContent(content) {
+		return &hrefDescr{}
+	}
+	return &hrefDescr{&feeds.Item{
+		Title:       href,
+		Link:        &feeds.Link{Href: href},
+		Description: string(content),
+		Id:          href,
+		Created:     time.Now(),
+	}}
+}
+
+func filterByContent(content []byte) bool {
+	return locationRx.Match(content) && positionRx.Match(content)
+}
+
 func aggregateCollectedLinks(
 	in chan<- *task,
 	out <-chan *task,
-	tasksInWork *int64) (links map[string]struct{}) {
-	links = make(map[string]struct{})
+	tasksInWork *int64) (links map[string]hrefDescr) {
+	links = map[string]hrefDescr{}
 	// Timer used to prevent hangouts.
 	timer := time.NewTimer(timeout)
 	for {
@@ -307,12 +345,12 @@ func aggregateCollectedLinks(
 			atomic.AddInt64(tasksInWork, -1)
 			// Save and visit new links.
 			d := t.depth + 1
-			freshLinks := make(map[string]struct{})
+			freshLinks := map[string]hrefDescr{}
 			for href, v := range t.hrefs {
 				// If link is not in links map, and task's depth is less then
 				// maxDepth, than send new task (with incremented depth) into in channel.
 				if _, ok := links[href]; !ok {
-					links[href] = struct{}{}
+					links[href] = v
 					if d < maxDepth && len(links) < numLinksToStop {
 						freshLinks[href] = v
 					}
@@ -325,14 +363,14 @@ func aggregateCollectedLinks(
 				} else {
 					// Split job.
 					i := 0
-					var batch map[string]struct{}
+					var batch map[string]hrefDescr
 					for href, v := range freshLinks {
 						if i%maxLinksPerTask == 0 {
 							if i > 0 {
 								in <- &task{d, batch}
 								atomic.AddInt64(tasksInWork, 1)
 							}
-							batch = make(map[string]struct{}, maxLinksPerTask)
+							batch = make(map[string]hrefDescr, maxLinksPerTask)
 						}
 						batch[href] = v
 						i++

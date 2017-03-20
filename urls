@@ -5,3 +5,5 @@
 "filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-html2atom welovegolang.com:https://www.welovegolang.com/jobs/remote" job
 
 query:job:tags # "job"
+
+"file:///home/nick/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-job-crawler.xml"
