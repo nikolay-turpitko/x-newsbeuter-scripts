@@ -1,0 +1,4 @@
+#!/bin/bash
+
+go build nb-job-crawler.go common.go
+cat ./nb-job-crawler.urls | ./nb-job-crawler 2&>nb-job-crawler.out

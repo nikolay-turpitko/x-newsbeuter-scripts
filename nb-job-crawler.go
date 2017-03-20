@@ -1,11 +1,12 @@
 package main
 
 import (
-	// "fmt"
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,22 +18,30 @@ import (
 	"golang.org/x/net/html"
 )
 
-// How deep to crowl.
-const maxDepth = 4
+// TODO: Have no time right now to make it into more general tool, hardcoded most settings.
 
-// Maximum links crowled (before filtering).
-// Note: this is a soft threshold to stop crowling,
-// but due buffering, crowler will visit far more links.
-const maxLinks = 400
+const (
+	// maxDepth sets how deep to crowl.
+	maxDepth = 4
 
-// Timeout to wait new links.
-const timeout = 4 * time.Second
+	// numLinksToStop is a maximum links to be crowled (before filtering).
+	// Note: this is a soft threshold to stop crowling, due buffering, crowler
+	// will visit far more links.
+	numLinksToStop = 400
 
-type task struct {
-	depth int
-	href  string
-	r     io.Reader
-}
+	// maxLinksPerTask is a threshold to split huge tasks.
+	maxLinksPerTask = 100
+
+	// timeout to wait for new links in aggregation loop.
+	// Used to detect when all workers finished their job.
+	timeout = 10 * time.Second
+
+	// maxFetchAttempts is a maximum number of attempts to download page.
+	maxFetchAttempts = 3
+
+	// sleepBetweenFetchAttempts timeout to sleep between attempts to download page.
+	sleepBetweenFetchAttempts = 2 * time.Second
+)
 
 // Links with these words in URL will not be visited and stored.
 var stopWords = []string{
@@ -80,17 +89,26 @@ var filterWords = []string{
 	"employ",
 }
 
+type task struct {
+	depth int
+	hrefs map[string]struct{}
+}
+
 func main() {
 	log.SetOutput(os.Stderr)
 	log.Println("RSS filter started")
 
 	var wg sync.WaitGroup
-	numWorkerChannels := 2 * maxLinks * numWorkers
 	in := make(chan *task, numWorkerChannels)
 	out := make(chan *task, numWorkerChannels)
 
 	// Send document from stdin to workers.
-	in <- &task{0, "", os.Stdin}
+	go func() {
+		for link, v := range processDocument(os.Stdin, nil) {
+			// Initial jobs sent individually to better distribute over workers.
+			in <- &task{0, map[string]struct{}{link: v}}
+		}
+	}()
 
 	// Start workers to process links.
 	wg.Add(numWorkers)
@@ -99,30 +117,7 @@ func main() {
 	}
 
 	// Wait for new links from workers.
-	// If link is not in links map, and task's depth is less then
-	// maxDepth, than send new task (with incremented depth) into channel.
-	links := make(map[string]struct{})
-	timer := time.NewTimer(timeout)
-WAIT_LINKS:
-	for {
-		select {
-		case <-timer.C:
-			// Wait workers to finish their job and close out channel.
-			close(in)
-			break WAIT_LINKS
-		case t := <-out:
-			timer.Reset(timeout)
-			// Save and visit new link.
-			href := t.href
-			if _, ok := links[href]; !ok {
-				links[href] = struct{}{}
-				d := t.depth + 1
-				if d < maxDepth && len(links) < maxLinks {
-					in <- &task{d, href, nil}
-				}
-			}
-		}
-	}
+	links := aggregateCollectedLinks(in, out)
 	wg.Wait()
 	close(out)
 
@@ -161,40 +156,62 @@ func collectLinks(
 	out chan<- *task,
 	wg *sync.WaitGroup) {
 	for t := range in {
-		href := t.href
-		r := t.r
-		if href == "" && r == nil {
-			log.Fatal("either href or r should be provided")
-		}
-		var rootURL *url.URL
-		if href != "" {
-			var err error
-			rootURL, err = url.Parse(href)
+		// There is a good chance that many links from close pages will overlap.
+		// It's better to remove duplicates localy.
+		collected := map[string]struct{}{}
+		for href := range t.hrefs {
+			rootURL, err := url.Parse(href)
 			if err != nil {
 				log.Println(err)
+				continue
 			}
-			if r == nil {
-				r, err = fetch(href)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
+			r, err := fetch(href)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			for link, v := range processDocument(r, rootURL) {
+				collected[link] = v
 			}
 		}
-		processDocument(r, out, rootURL, t.depth)
+		out <- &task{t.depth, collected}
 	}
 	wg.Done()
 }
 
+// fetch checks mime type and downloads page.
 func fetch(href string) (io.Reader, error) {
+	retry := 0
+	sleepTimeout := sleepBetweenFetchAttempts * time.Second
+RETRY:
 	resp, err := http.Get(href)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests && retry < maxFetchAttempts {
+		time.Sleep(sleepTimeout)
+		retry++
+		sleepTimeout *= 2
+		goto RETRY
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status from %s: %s", href, resp.Status)
+	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = http.DetectContentType(body)
+	}
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(mt, "html") {
+		return nil, fmt.Errorf("unknown mime type: %s, raw: %s", mt, ct)
 	}
 	body = prefixRx.ReplaceAll(body, []byte{})
 	body = suffixRx.ReplaceAll(body, []byte{})
@@ -203,9 +220,8 @@ func fetch(href string) (io.Reader, error) {
 
 func processDocument(
 	r io.Reader,
-	out chan<- *task,
-	rootURL *url.URL,
-	depth int) {
+	rootURL *url.URL) (links map[string]struct{}) {
+	links = map[string]struct{}{}
 	p := customBluemondayPolicy()
 	z := html.NewTokenizer(p.SanitizeReader(r))
 	for {
@@ -215,7 +231,7 @@ func processDocument(
 			if z.Err() != io.EOF {
 				log.Println(z.Err())
 			}
-			return
+			return links
 		case html.StartTagToken, html.SelfClosingTagToken:
 			tn, hasAttr := z.TagName()
 			if !hasAttr {
@@ -239,23 +255,79 @@ func processDocument(
 						break ATTRS
 					}
 				}
-				if bytes.HasPrefix(v, []byte("http")) {
-					out <- &task{depth, string(v), nil}
-					break ATTRS
-				}
-				if rootURL == nil {
-					break ATTRS
-				}
+				// Parse then convert to string, to save canonised link (to eliminate some duplicates).
 				l, err := url.Parse(string(v))
 				if err != nil {
 					log.Println(err)
 					break ATTRS
 				}
+				l.Fragment = ""                          // Remove "#" part.
+				l.Path = strings.TrimSuffix(l.Path, "/") // Remove trailing slash, can cause errors on rare sites, but eliminates some duplicates.
 				if l.IsAbs() {
+					if strings.HasPrefix(l.Scheme, "http") {
+						links[l.String()] = struct{}{}
+					}
 					break ATTRS
 				}
-				out <- &task{depth, rootURL.ResolveReference(l).String(), nil}
+				if rootURL == nil {
+					break ATTRS
+				}
+				links[rootURL.ResolveReference(l).String()] = struct{}{}
 			}
 		}
 	}
+	return links
+}
+
+func aggregateCollectedLinks(
+	in chan<- *task,
+	out <-chan *task) (links map[string]struct{}) {
+	links = make(map[string]struct{})
+	// If link is not in links map, and task's depth is less then
+	// maxDepth, than send new task (with incremented depth) into channel.
+	timer := time.NewTimer(timeout)
+	for {
+		select {
+		case <-timer.C:
+			// Wait workers to finish their job and close out channel.
+			close(in)
+			return links
+		case t := <-out:
+			timer.Stop()
+			// Save and visit new links.
+			d := t.depth + 1
+			freshLinks := make(map[string]struct{})
+			for href, v := range t.hrefs {
+				if _, ok := links[href]; !ok {
+					links[href] = struct{}{}
+					if d < maxDepth && len(links) < numLinksToStop {
+						freshLinks[href] = v
+					}
+				}
+			}
+			if len(freshLinks) > 0 {
+				if len(freshLinks) < maxLinksPerTask {
+					in <- &task{d, freshLinks}
+				} else {
+					// Split job.
+					i := 0
+					var batch map[string]struct{}
+					for href, v := range freshLinks {
+						if i%maxLinksPerTask == 0 {
+							if i > 0 {
+								in <- &task{d, batch}
+							}
+							batch = make(map[string]struct{}, maxLinksPerTask)
+						}
+						batch[href] = v
+					}
+					if len(batch) > 0 {
+						in <- &task{d, batch}
+					}
+				}
+			}
+			timer.Reset(timeout)
+		}
+	}
+	return links
 }
