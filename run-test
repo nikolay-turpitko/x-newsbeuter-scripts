@@ -2,6 +2,6 @@
 
 go build nb-enrich-descr.go common.go 
 go build nb-html2atom.go common.go
-go build nb-job-crawler.go
+go build nb-job-crawler.go common.go
 rm /tmp/newsbeuter-cache /tmp/newsbeuter.log
 newsbeuter -r -u urls -c /tmp/newsbeuter-cache -l 6 -d /tmp/newsbeuter.log
