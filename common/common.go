@@ -1,4 +1,4 @@
-package main
+package common
 
 import (
 	"bytes"
@@ -11,16 +11,16 @@ import (
 
 const (
 	// Can be more then NumCPU, because workers are blocked on net IO.
-	numWorkers        = 10
-	numWorkerChannels = numWorkers * 2
+	NumWorkers        = 10
+	NumWorkerChannels = NumWorkers * 2
 )
 
 var (
-	prefixRx = regexp.MustCompile("^.*<body>")
-	suffixRx = regexp.MustCompile("</body>.*$")
+	PrefixRx = regexp.MustCompile("^.*<body>")
+	SuffixRx = regexp.MustCompile("</body>.*$")
 )
 
-func cleanupHTML(b []byte) []byte {
+func CleanupHTML(b []byte) []byte {
 	node, err := html.Parse(bytes.NewReader(b))
 	if err != nil {
 		log.Println(err)
@@ -35,7 +35,7 @@ func cleanupHTML(b []byte) []byte {
 	return bb.Bytes()
 }
 
-func customBluemondayPolicy() *bluemonday.Policy {
+func CustomBluemondayPolicy() *bluemonday.Policy {
 	p := bluemonday.StrictPolicy()
 	p.AllowStandardAttributes()
 	p.AllowStandardURLs()

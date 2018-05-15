@@ -10,6 +10,8 @@ import (
 
 	"github.com/gorilla/feeds"
 	"github.com/mmcdole/gofeed"
+
+	"github.com/nikolay-turpitko/x-newsbeuter-scripts/common"
 )
 
 func main() {
@@ -19,12 +21,12 @@ func main() {
 	fp := gofeed.NewParser()
 	feedIn, _ := fp.Parse(os.Stdin)
 
-	in := make(chan *gofeed.Item, numWorkerChannels)
-	out := make(chan *gofeed.Item, numWorkerChannels)
+	in := make(chan *gofeed.Item, common.NumWorkerChannels)
+	out := make(chan *gofeed.Item, common.NumWorkerChannels)
 	done := make(chan struct{})
 
 	// Start workers to process items (download content and filter).
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < common.NumWorkers; i++ {
 		go processItems(in, out, done)
 	}
 
@@ -51,7 +53,7 @@ func emitItems(items []*gofeed.Item, in chan<- *gofeed.Item) {
 }
 
 func waitWorkers(done <-chan struct{}, ch chan<- *gofeed.Item) {
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < common.NumWorkers; i++ {
 		<-done
 	}
 	close(ch)
@@ -74,13 +76,13 @@ func processItems(
 			continue
 		}
 		// Cleanup and append article body to description.
-		body = cleanupHTML(body)
-		body = prefixRx.ReplaceAll(body, []byte{})
-		body = suffixRx.ReplaceAll(body, []byte{})
-		p := customBluemondayPolicy()
+		body = common.CleanupHTML(body)
+		body = common.PrefixRx.ReplaceAll(body, []byte{})
+		body = common.SuffixRx.ReplaceAll(body, []byte{})
+		p := common.CustomBluemondayPolicy()
 		item.Description = fmt.Sprintf(
 			"%s<br><hr><br>%s",
-			p.SanitizeBytes(cleanupHTML([]byte(item.Description))),
+			p.SanitizeBytes(common.CleanupHTML([]byte(item.Description))),
 			string(p.SanitizeBytes(body)))
 		out <- item
 	}

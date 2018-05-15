@@ -14,6 +14,8 @@ import (
 	"github.com/gorilla/feeds"
 	"github.com/spf13/viper"
 	"gopkg.in/xmlpath.v2"
+
+	"github.com/nikolay-turpitko/x-newsbeuter-scripts/common"
 )
 
 // rawconfig is a map of root urls to settings (as in config file).
@@ -61,7 +63,7 @@ func main() {
 	viper.AddConfigPath(".")
 	viper.AddConfigPath(dir)
 	log.Println(dir)
-	viper.SetConfigName(filepath.Base(os.Args[0]))
+	viper.SetConfigName("." + filepath.Base(os.Args[0]))
 	err = viper.ReadInConfig()
 	if err != nil {
 		log.Fatalln(err)
@@ -88,19 +90,19 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	html = cleanupHTML(html)
+	html = common.CleanupHTML(html)
 
 	root, err := xmlpath.ParseHTML(bytes.NewReader(html))
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	in := make(chan *xmlpath.Node, numWorkerChannels)
-	out := make(chan *feeds.Item, numWorkerChannels)
+	in := make(chan *xmlpath.Node, common.NumWorkerChannels)
+	out := make(chan *feeds.Item, common.NumWorkerChannels)
 	done := make(chan struct{})
 
 	// Start workers to process items (download content and filter).
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < common.NumWorkers; i++ {
 		go processItems(in, out, done)
 	}
 
@@ -127,7 +129,7 @@ func emitItems(it *xmlpath.Iter, in chan<- *xmlpath.Node) {
 }
 
 func waitWorkers(done <-chan struct{}, ch chan<- *feeds.Item) {
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < common.NumWorkers; i++ {
 		<-done
 	}
 	close(ch)
@@ -166,13 +168,13 @@ func processItems(
 			continue
 		}
 		// Cleanup and append article body to description.
-		body = cleanupHTML(body)
-		body = prefixRx.ReplaceAll(body, []byte{})
-		body = suffixRx.ReplaceAll(body, []byte{})
-		p := customBluemondayPolicy()
+		body = common.CleanupHTML(body)
+		body = common.PrefixRx.ReplaceAll(body, []byte{})
+		body = common.SuffixRx.ReplaceAll(body, []byte{})
+		p := common.CustomBluemondayPolicy()
 		description = fmt.Sprintf(
 			"%s<br><hr><br>%s",
-			p.SanitizeBytes(cleanupHTML([]byte(description))),
+			p.SanitizeBytes(common.CleanupHTML([]byte(description))),
 			string(p.SanitizeBytes(body)))
 		s := extractXPathValue("created", cfg.created, node)
 		created, err := time.Parse(cfg.dateFormat, s)

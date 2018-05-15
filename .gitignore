@@ -23,9 +23,5 @@ _testmain.go
 *.test
 *.prof
 
-
 vendor/
-nb-enrich-descr
-nb-html2atom
-nb-job-crawler
 nb-job-crawler.xml

@@ -1,7 +1,12 @@
 #!/bin/bash
 
-go build nb-enrich-descr.go common.go 
-go build nb-html2atom.go common.go
-go build nb-job-crawler.go common.go
-rm /tmp/newsbeuter-cache /tmp/newsbeuter.log
-newsbeuter -r -u urls -c /tmp/newsbeuter-cache -l 6 -d /tmp/newsbeuter.log
+export wrkdir=$(mktemp -d --tmpdir nb-test-XXXX)
+
+go build -o "$wrkdir/nb-enrich-descr" github.com/nikolay-turpitko/x-newsbeuter-scripts/cmd/nb-enrich-descr
+go build -o "$wrkdir/nb-html2atom" github.com/nikolay-turpitko/x-newsbeuter-scripts/cmd/nb-html2atom
+go build -o "$wrkdir/nb-job-crawler" github.com/nikolay-turpitko/x-newsbeuter-scripts/cmd/nb-job-crawler
+
+# potentially long task, save results to file, accessible via "file:///" URL.
+cat ./nb-job-crawler.urls | "$wrkdir/nb-job-crawler" >"/tmp/nb-job-crawler.xml" 2>"$wrkdir/nb-job-crawler.log" &
+
+PATH=$wrkdir:$PATH newsbeuter -r -u urls -c "$wrkdir/newsbeuter-cache" -l 6 -d "$wrkdir/newsbeuter.log"

@@ -1,8 +1,8 @@
-"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-enrich-descr:http://www.golangprojects.com/rss.xml" job
-"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-enrich-descr:https://weworkremotely.com/categories/2-programming/jobs.rss" job
+"filter:nb-enrich-descr:http://www.golangprojects.com/rss.xml" job
+"filter:nb-enrich-descr:https://weworkremotely.com/categories/remote-programming-jobs.rss" job
 
-"filter:~/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-html2atom welovegolang.com:https://www.welovegolang.com/jobs/remote" job
+"filter:nb-html2atom welovegolang.com:https://www.welovegolang.com/jobs/remote" job
 
-query:job:tags # "job"
+"query:[All remote jobs]:tags # \"job\""
 
-"file:///home/nick/go/src/github.com/nikolay-turpitko/x-newsbeuter-scripts/nb-job-crawler.xml"
+"file:///tmp/nb-job-crawler.xml" work-crawler

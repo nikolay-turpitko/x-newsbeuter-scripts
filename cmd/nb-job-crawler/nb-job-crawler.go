@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -18,9 +19,13 @@ import (
 
 	"github.com/gorilla/feeds"
 	"golang.org/x/net/html"
+
+	"github.com/nikolay-turpitko/x-newsbeuter-scripts/common"
 )
 
 // TODO: Have no time right now to make it into more general tool, hardcoded most settings.
+// TODO: Awful performance with many hanging https connections.
+// TODO: Refactor to cancel scheduled tasks on timeout.
 
 const (
 	// maxDepth sets how deep to crowl.
@@ -29,14 +34,18 @@ const (
 	// numLinksToStop is a maximum links to be crowled (before filtering).
 	// Note: this is a soft threshold to stop crowling, due buffering, crawler
 	// will visit far more links.
-	numLinksToStop = 3000
+	numLinksToStop = 500
 
 	// maxLinksPerTask is a threshold to split huge tasks.
-	maxLinksPerTask = 200
+	maxLinksPerTask = 10
 
-	// timeout to wait for new links in aggregation loop.
+	// timeout to perform all job.
+	// When it expired, all so far aggregated links are returned and program exits.
+	timeout = 5 * time.Minute
+
+	// watchdogTimeout is a timeout to wait for new links in aggregation loop.
 	// Used as an anti-hangout watchdog timer.
-	timeout = 10 * time.Minute
+	watchdogTimeout = 1 * time.Minute
 
 	// maxFetchAttempts is a maximum number of attempts to download page.
 	maxFetchAttempts = 3
@@ -78,6 +87,7 @@ var filterStopWords = []string{
 	"hh",
 	"moikrug",
 	"search", // ?
+	"blog",
 }
 
 // Only links with any of these words in URL will be stored into the feed.
@@ -125,9 +135,11 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.Println("RSS filter started")
 
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+
 	var wg sync.WaitGroup
-	in := make(chan *task, numWorkerChannels)
-	out := make(chan *task, numWorkerChannels)
+	in := make(chan *task, common.NumWorkerChannels)
+	out := make(chan *task, common.NumWorkerChannels)
 
 	// Counter of tasks in work.
 	tasksInWork := int64(0)
@@ -142,19 +154,20 @@ func main() {
 	}()
 
 	// Start workers to process links.
-	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < common.NumWorkers; i++ {
 		go collectLinks(in, out, &wg)
 	}
 
 	// Wait for new links from workers.
 	links := aggregateCollectedLinks(in, out, &tasksInWork)
+	log.Println("Wait for workers to stop")
 	wg.Wait()
 	close(out)
 
 	// Filter results.
 	// Unfortunately, cannot filter during aggregation. Otherwise crawler
 	// would vaste time visiting ads many times.
+	log.Println("Filter results")
 	for href := range links {
 		remove := false
 		// First check for stop words.
@@ -180,6 +193,7 @@ func main() {
 	}
 
 	// Output result feed.
+	log.Println("Output results")
 	if len(links) > 0 {
 		t := time.Now()
 		feedOut := feeds.Feed{
@@ -204,6 +218,7 @@ func collectLinks(
 	in <-chan *task,
 	out chan<- *task,
 	wg *sync.WaitGroup) {
+	wg.Add(1)
 	for t := range in {
 		// There is a good chance that many links from close pages will overlap.
 		// It's better to remove duplicates localy.
@@ -267,8 +282,8 @@ func fetch(href string) (io.Reader, error) {
 	if !strings.Contains(mt, "html") {
 		return nil, fmt.Errorf("unknown mime type: %s, raw: %s", mt, ct)
 	}
-	body = prefixRx.ReplaceAll(body, []byte{})
-	body = suffixRx.ReplaceAll(body, []byte{})
+	body = common.PrefixRx.ReplaceAll(body, []byte{})
+	body = common.SuffixRx.ReplaceAll(body, []byte{})
 	return bytes.NewReader(body), nil
 }
 
@@ -276,7 +291,7 @@ func processDocument(
 	r io.Reader,
 	rootURL *url.URL) (links map[string]hrefDescr) {
 	links = map[string]hrefDescr{}
-	p := customBluemondayPolicy()
+	p := common.CustomBluemondayPolicy()
 	r = p.SanitizeReader(r)
 	var copy bytes.Buffer
 	r = io.TeeReader(r, &copy)
@@ -360,16 +375,24 @@ func aggregateCollectedLinks(
 	out <-chan *task,
 	tasksInWork *int64) (links map[string]hrefDescr) {
 	links = map[string]hrefDescr{}
-	// Timer used to prevent hangouts.
+	// Overall job timer.
 	timer := time.NewTimer(timeout)
+	// Timer used to prevent hangouts.
+	watchdog := time.NewTimer(watchdogTimeout)
 	for {
 		select {
 		case <-timer.C:
+			// Overall timeout.
+			log.Println("Overall timeout expired")
+			close(in)
+			return links
+		case <-watchdog.C:
 			// Hangout watchdog.
+			log.Println("Watchdog timeout expired")
 			close(in)
 			return links
 		case t := <-out:
-			timer.Stop()
+			watchdog.Stop()
 			atomic.AddInt64(tasksInWork, -1)
 			// Save and visit new links.
 			d := t.depth + 1
@@ -410,11 +433,12 @@ func aggregateCollectedLinks(
 				}
 			}
 			inWork := atomic.LoadInt64(tasksInWork)
+			log.Printf("Tasks in work: %d", inWork)
 			if inWork <= 0 {
 				close(in)
 				return links
 			}
-			timer.Reset(timeout)
+			watchdog.Reset(watchdogTimeout)
 		}
 	}
 	return links
