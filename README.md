@@ -45,8 +45,8 @@ Returns a lot of garbage links. More advanced logic required to filter out
 false hits, but I have no time for it.
 
 __Note__: Scripts created for my own use. So, no tests nor installer. If you
-decide to use this scripts, you'll need a Go compiler. Build like in
-`./run-test` script, copy binary files whenever you want (I prefer `~/bin`), put
-yml config for `nb-html2atom` along with binary file (if you dropped binary into
-`~/bin`, you should drop config into you home dir) and setup urls in your `urls`
-file.
+decide to use this scripts, you'll need a Go compiler. I refactored them to use 
+`go get github.com/nikolay-turpitko/x-newsbeuter-scripts/cmd/...`.  Put 
+`.nb-html2atom.yaml` into the same directory with binary file or into working 
+dir (which should be a home dir, when run them with `newsbeuter`) and setup 
+urls in your `urls` file.
